@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Video Splitter - 15 Minute Chunks</title>
+  <title>Smart Video Splitter</title>
   <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
   <style>
     body {
@@ -27,15 +27,18 @@
       to { text-shadow: 0 0 20px #00f260, 0 0 30px #0575e6; }
     }
 
-    input[type="file"] {
+    input[type="file"],
+    input[type="number"] {
       padding: 12px 20px;
       font-size: 16px;
       border: none;
       border-radius: 8px;
-      background: #fff;
-      color: #000;
-      margin-bottom: 25px;
+      margin: 10px 5px;
       cursor: pointer;
+    }
+
+    input[type="number"] {
+      width: 100px;
     }
 
     #loader {
@@ -70,7 +73,6 @@
       margin: 10px 5px;
       padding: 10px 16px;
       border-radius: 8px;
-      background: #00c9ff;
       background: linear-gradient(90deg, #92fe9d, #00c9ff);
       color: #000;
       font-weight: bold;
@@ -85,29 +87,33 @@
     }
 
     @media (max-width: 480px) {
-      body {
-        padding: 20px;
-      }
-      #loader {
-        width: 100%;
-      }
+      body { padding: 20px; }
+      #loader { width: 100%; }
     }
   </style>
 </head>
 <body>
-  <h1>Split Movie into 15-Minute Parts</h1>
+  <h1>Smart Video Splitter</h1>
   <input type="file" id="videoUpload" accept="video/*"><br>
+  <input type="number" id="durationInput" placeholder="Seconds" min="1" value="900">
   <div id="loader"><div id="progressBar">0%</div></div>
-  <p id="status">Please upload a video.</p>
+  <p id="status">Please upload a video and set split duration.</p>
   <div id="output"></div>
 
   <script>
     const { createFFmpeg, fetchFile } = FFmpeg;
     const ffmpeg = createFFmpeg({ log: true });
 
+    const videoUpload = document.getElementById('videoUpload');
+    const durationInput = document.getElementById('durationInput');
     const progressBar = document.getElementById('progressBar');
     const statusText = document.getElementById('status');
     const output = document.getElementById('output');
+
+    const setLoading = (loading) => {
+      videoUpload.disabled = loading;
+      durationInput.disabled = loading;
+    };
 
     const updateProgress = (p) => {
       const percent = Math.min(Math.round(p * 100), 100);
@@ -115,55 +121,74 @@
       progressBar.textContent = percent + '%';
     };
 
-    document.getElementById('videoUpload').addEventListener('change', async (e) => {
+    videoUpload.addEventListener('change', async (e) => {
       const file = e.target.files[0];
-      if (!file) return;
+      const duration = parseInt(durationInput.value || '900');
 
-      output.innerHTML = '';
-      statusText.textContent = 'Loading FFmpeg...';
+      if (!file || !file.name.match(/\.(mp4|mov|mkv|avi)$/i)) {
+        statusText.textContent = 'Please upload a valid video file (mp4, mov, mkv, avi).';
+        return;
+      }
+
+      if (!duration || duration <= 0) {
+        statusText.textContent = 'Enter a valid split time in seconds.';
+        return;
+      }
+
+      setLoading(true);
       updateProgress(0);
+      output.innerHTML = '';
+      statusText.textContent = 'Initializing FFmpeg...';
 
-      if (!ffmpeg.isLoaded()) {
-        ffmpeg.setProgress(({ ratio }) => updateProgress(ratio));
-        await ffmpeg.load();
-      }
-
-      statusText.textContent = 'Reading file: ' + file.name;
-      await ffmpeg.FS('writeFile', file.name, await fetchFile(file));
-      updateProgress(0.2);
-
-      statusText.textContent = 'Splitting into 15-minute clips... Please wait.';
-      await ffmpeg.run(
-        '-i', file.name,
-        '-c', 'copy',
-        '-map', '0',
-        '-segment_time', '30',
-        '-f', 'segment',
-        'chunk%03d.mp4'
-      );
-      updateProgress(0.9);
-
-      statusText.textContent = 'Creating download links...';
-      let i = 0;
-      while (true) {
-        const chunkName = `chunk${String(i).padStart(3, '0')}.mp4`;
-        try {
-          const data = ffmpeg.FS('readFile', chunkName);
-          const blob = new Blob([data.buffer], { type: 'video/mp4' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = chunkName;
-          a.textContent = `Download ${chunkName}`;
-          output.appendChild(a);
-          i++;
-        } catch {
-          break;
+      try {
+        if (!ffmpeg.isLoaded()) {
+          ffmpeg.setProgress(({ ratio }) => updateProgress(ratio));
+          await ffmpeg.load();
         }
-      }
 
-      updateProgress(1);
-      statusText.textContent = `Done! ${i} parts generated.`;
+        statusText.textContent = 'Processing: ' + file.name;
+        await ffmpeg.FS('writeFile', file.name, await fetchFile(file));
+        updateProgress(0.2);
+
+        statusText.textContent = `Splitting every ${duration} seconds...`;
+        await ffmpeg.run(
+          '-i', file.name,
+          '-c', 'copy',
+          '-map', '0',
+          '-f', 'segment',
+          '-segment_time', `${duration}`,
+          `chunk%03d.mp4`
+        );
+
+        updateProgress(0.9);
+        statusText.textContent = 'Generating download links...';
+
+        let i = 0;
+        while (true) {
+          const chunkName = `chunk${String(i).padStart(3, '0')}.mp4`;
+          try {
+            const data = ffmpeg.FS('readFile', chunkName);
+            const blob = new Blob([data.buffer], { type: 'video/mp4' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = chunkName;
+            a.textContent = `Download ${chunkName}`;
+            output.appendChild(a);
+            i++;
+          } catch {
+            break;
+          }
+        }
+
+        updateProgress(1);
+        statusText.textContent = `Done! ${i} part(s) created.`;
+      } catch (err) {
+        console.error(err);
+        statusText.textContent = 'Error processing video. Please try again or use a different file.';
+      } finally {
+        setLoading(false);
+      }
     });
   </script>
 </body>
