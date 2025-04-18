@@ -87,16 +87,15 @@
     }
 
     video {
-      width: 240px;
-      margin: 10px;
+      max-width: 100%;
+      margin-top: 10px;
       border-radius: 10px;
-      border: 2px solid #00f260;
+      box-shadow: 0 0 10px rgba(0,255,255,0.3);
     }
 
     @media (max-width: 480px) {
       body { padding: 20px; }
       #loader { width: 100%; }
-      video { width: 100%; }
     }
   </style>
 </head>
@@ -111,17 +110,11 @@
   <script>
     const { createFFmpeg, fetchFile } = FFmpeg;
     const ffmpeg = createFFmpeg({ log: true });
-
     const videoUpload = document.getElementById('videoUpload');
     const durationInput = document.getElementById('durationInput');
     const progressBar = document.getElementById('progressBar');
     const statusText = document.getElementById('status');
     const output = document.getElementById('output');
-
-    const setLoading = (loading) => {
-      videoUpload.disabled = loading;
-      durationInput.disabled = loading;
-    };
 
     const updateProgress = (p) => {
       const percent = Math.min(Math.round(p * 100), 100);
@@ -129,16 +122,28 @@
       progressBar.textContent = percent + '%';
     };
 
+    const setLoading = (loading) => {
+      videoUpload.disabled = loading;
+      durationInput.disabled = loading;
+    };
+
+    const getDurationFromFFmpegLogs = (logs) => {
+      const match = logs.match(/Duration: (\d+):(\d+):(\d+\.\d+)/);
+      if (!match) return 0;
+      const [, hh, mm, ss] = match;
+      return parseInt(hh) * 3600 + parseInt(mm) * 60 + parseFloat(ss);
+    };
+
     videoUpload.addEventListener('change', async (e) => {
       const file = e.target.files[0];
-      const duration = parseInt(durationInput.value || '900');
+      const chunkDuration = parseInt(durationInput.value || '900');
 
       if (!file || !file.name.match(/\.(mp4|mov|mkv|avi)$/i)) {
         statusText.textContent = 'Please upload a valid video file (mp4, mov, mkv, avi).';
         return;
       }
 
-      if (!duration || duration <= 0) {
+      if (!chunkDuration || chunkDuration <= 0) {
         statusText.textContent = 'Enter a valid split time in seconds.';
         return;
       }
@@ -154,61 +159,63 @@
           await ffmpeg.load();
         }
 
-        const inputName = 'inputVideo' + file.name.substring(file.name.lastIndexOf('.'));
-        statusText.textContent = 'Processing: ' + file.name;
+        const inputName = file.name;
         await ffmpeg.FS('writeFile', inputName, await fetchFile(file));
 
-        statusText.textContent = `Splitting every ${duration} seconds...`;
+        statusText.textContent = 'Probing video duration...';
+        let metadataOutput = '';
+        const originalLog = console.log;
+        console.log = (msg) => { metadataOutput += msg + '\n'; };
 
-        await ffmpeg.run(
-          '-i', inputName,
-          '-force_key_frames', `expr:gte(t,n_forced*${duration})`,
-          '-reset_timestamps', '1',
-          '-map', '0',
-          '-f', 'segment',
-          '-segment_time', `${duration}`,
-          '-c:v', 'libx264',
-          '-c:a', 'aac',
-          'chunk%03d.mp4'
-        );
+        try {
+          await ffmpeg.run('-i', inputName);
+        } catch {}
 
-        updateProgress(0.9);
-        statusText.textContent = 'Generating previews and download links...';
+        console.log = originalLog;
 
-        let i = 0;
-        while (true) {
-          const chunkName = `chunk${String(i).padStart(3, '0')}.mp4`;
-          try {
-            const data = ffmpeg.FS('readFile', chunkName);
-            const blob = new Blob([data.buffer], { type: 'video/mp4' });
-            const url = URL.createObjectURL(blob);
-
-            const container = document.createElement('div');
-
-            const video = document.createElement('video');
-            video.src = url;
-            video.controls = true;
-
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = chunkName;
-            link.textContent = `Download ${chunkName}`;
-
-            container.appendChild(video);
-            container.appendChild(link);
-            output.appendChild(container);
-
-            i++;
-          } catch {
-            break;
-          }
+        const totalDuration = getDurationFromFFmpegLogs(metadataOutput);
+        const totalParts = Math.ceil(totalDuration / chunkDuration);
+        if (!totalDuration || totalParts === 0) {
+          throw new Error('Unable to determine video duration.');
         }
 
-        updateProgress(1);
-        statusText.textContent = `Done! ${i} part(s) created.`;
+        statusText.textContent = `Splitting video into ${totalParts} part(s)...`;
+
+        for (let i = 0; i < totalParts; i++) {
+          const start = i * chunkDuration;
+          const outputName = `part_${i}.mp4`;
+
+          await ffmpeg.run(
+            '-ss', `${start}`,
+            '-t', `${chunkDuration}`,
+            '-i', inputName,
+            '-c', 'copy',
+            outputName
+          );
+
+          const data = ffmpeg.FS('readFile', outputName);
+          const blob = new Blob([data.buffer], { type: 'video/mp4' });
+          const url = URL.createObjectURL(blob);
+
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = outputName;
+          link.textContent = `Download part ${i + 1}`;
+          output.appendChild(link);
+
+          const videoPreview = document.createElement('video');
+          videoPreview.src = url;
+          videoPreview.controls = true;
+          videoPreview.title = `Start: ${start}s`;
+          output.appendChild(videoPreview);
+
+          updateProgress((i + 1) / totalParts);
+        }
+
+        statusText.textContent = `Done! ${totalParts} part(s) created.`;
       } catch (err) {
         console.error(err);
-        statusText.textContent = 'Error processing video. Please try again with a different file.';
+        statusText.textContent = 'Error: ' + err.message;
       } finally {
         setLoading(false);
       }
