@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>Smart Video Splitter</title>
   <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
   <style>
@@ -68,49 +68,35 @@
       color: #ccc;
     }
 
-    #output {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 20px;
-      margin-top: 30px;
-    }
-
-    .chunk-preview {
-      background: #222;
-      padding: 12px;
-      border-radius: 12px;
-      box-shadow: 0 0 10px rgba(0,255,255,0.2);
-      width: 240px;
-    }
-
-    .chunk-preview video {
-      width: 100%;
-      border-radius: 8px;
-    }
-
-    .chunk-preview p {
-      margin-top: 10px;
-      font-size: 14px;
-      color: #ccc;
-    }
-
-    .chunk-preview a {
+    #output a {
       display: inline-block;
-      margin-top: 8px;
-      padding: 6px 10px;
+      margin: 10px 5px;
+      padding: 10px 16px;
+      border-radius: 8px;
       background: linear-gradient(90deg, #92fe9d, #00c9ff);
       color: #000;
       font-weight: bold;
       text-decoration: none;
-      border-radius: 6px;
-      font-size: 14px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    #output a:hover {
+      transform: scale(1.05);
+      box-shadow: 0 6px 15px rgba(0,255,255,0.3);
+    }
+
+    video {
+      width: 240px;
+      margin: 10px;
+      border-radius: 10px;
+      border: 2px solid #00f260;
     }
 
     @media (max-width: 480px) {
       body { padding: 20px; }
       #loader { width: 100%; }
-      .chunk-preview { width: 100%; }
+      video { width: 100%; }
     }
   </style>
 </head>
@@ -137,69 +123,30 @@
       durationInput.disabled = loading;
     };
 
-    const updateProgress = (ratio) => {
-      const percent = Math.min(Math.round(ratio * 100), 100);
+    const updateProgress = (p) => {
+      const percent = Math.min(Math.round(p * 100), 100);
       progressBar.style.width = percent + '%';
       progressBar.textContent = percent + '%';
     };
 
-    const showStatus = (message) => {
-      statusText.textContent = message;
-    };
+    videoUpload.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      const duration = parseInt(durationInput.value || '900');
 
-    const isValidFile = (file) => {
-      return file && /\.(mp4|mov|mkv|avi)$/i.test(file.name);
-    };
-
-    const isValidDuration = (duration) => {
-      return !isNaN(duration) && duration > 0;
-    };
-
-    const generateChunkPreviews = async (duration) => {
-      let i = 0;
-      while (true) {
-        const chunkName = `chunk${String(i).padStart(3, '0')}.mp4`;
-        try {
-          const data = ffmpeg.FS('readFile', chunkName);
-          const blob = new Blob([data.buffer], { type: 'video/mp4' });
-          const url = URL.createObjectURL(blob);
-          const startTime = duration * i;
-          const minutes = Math.floor(startTime / 60);
-          const seconds = startTime % 60;
-
-          const preview = document.createElement('div');
-          preview.className = 'chunk-preview';
-
-          const video = document.createElement('video');
-          video.src = url;
-          video.controls = true;
-
-          const time = document.createElement('p');
-          time.textContent = `Start Time: ${minutes}m ${seconds}s`;
-
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = chunkName;
-          link.textContent = 'Download';
-
-          preview.appendChild(video);
-          preview.appendChild(time);
-          preview.appendChild(link);
-          output.appendChild(preview);
-
-          i++;
-        } catch {
-          break;
-        }
+      if (!file || !file.name.match(/\.(mp4|mov|mkv|avi)$/i)) {
+        statusText.textContent = 'Please upload a valid video file (mp4, mov, mkv, avi).';
+        return;
       }
-      return i;
-    };
 
-    const splitVideo = async (file, duration) => {
+      if (!duration || duration <= 0) {
+        statusText.textContent = 'Enter a valid split time in seconds.';
+        return;
+      }
+
       setLoading(true);
       updateProgress(0);
       output.innerHTML = '';
-      showStatus('Initializing FFmpeg...');
+      statusText.textContent = 'Initializing FFmpeg...';
 
       try {
         if (!ffmpeg.isLoaded()) {
@@ -207,49 +154,64 @@
           await ffmpeg.load();
         }
 
-        showStatus(`Processing: ${file.name}`);
-        await ffmpeg.FS('writeFile', file.name, await fetchFile(file));
-        updateProgress(0.2);
+        const inputName = 'inputVideo' + file.name.substring(file.name.lastIndexOf('.'));
+        statusText.textContent = 'Processing: ' + file.name;
+        await ffmpeg.FS('writeFile', inputName, await fetchFile(file));
 
-        showStatus(`Splitting every ${duration} seconds...`);
+        statusText.textContent = `Splitting every ${duration} seconds...`;
+
         await ffmpeg.run(
-          '-i', file.name,
-          '-c', 'copy',
+          '-i', inputName,
+          '-force_key_frames', `expr:gte(t,n_forced*${duration})`,
+          '-reset_timestamps', '1',
           '-map', '0',
           '-f', 'segment',
           '-segment_time', `${duration}`,
-          `chunk%03d.mp4`
+          '-c:v', 'libx264',
+          '-c:a', 'aac',
+          'chunk%03d.mp4'
         );
 
         updateProgress(0.9);
-        showStatus('Generating previews and download links...');
-        const chunksCount = await generateChunkPreviews(duration);
+        statusText.textContent = 'Generating previews and download links...';
+
+        let i = 0;
+        while (true) {
+          const chunkName = `chunk${String(i).padStart(3, '0')}.mp4`;
+          try {
+            const data = ffmpeg.FS('readFile', chunkName);
+            const blob = new Blob([data.buffer], { type: 'video/mp4' });
+            const url = URL.createObjectURL(blob);
+
+            const container = document.createElement('div');
+
+            const video = document.createElement('video');
+            video.src = url;
+            video.controls = true;
+
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = chunkName;
+            link.textContent = `Download ${chunkName}`;
+
+            container.appendChild(video);
+            container.appendChild(link);
+            output.appendChild(container);
+
+            i++;
+          } catch {
+            break;
+          }
+        }
 
         updateProgress(1);
-        showStatus(`Done! ${chunksCount} part(s) created.`);
+        statusText.textContent = `Done! ${i} part(s) created.`;
       } catch (err) {
         console.error(err);
-        showStatus('Error processing video. Please try again.');
+        statusText.textContent = 'Error processing video. Please try again with a different file.';
       } finally {
         setLoading(false);
       }
-    };
-
-    videoUpload.addEventListener('change', () => {
-      const file = videoUpload.files[0];
-      const duration = parseInt(durationInput.value, 10);
-
-      if (!isValidFile(file)) {
-        showStatus('Invalid file. Please upload a video (mp4, mov, mkv, avi).');
-        return;
-      }
-
-      if (!isValidDuration(duration)) {
-        showStatus('Invalid duration. Please enter a value greater than 0.');
-        return;
-      }
-
-      splitVideo(file, duration);
     });
   </script>
 </body>
