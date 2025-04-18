@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Video Splitter - 15 Minute Chunks</title>
+  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: linear-gradient(to right, #0f2027, #203a43, #2c5364);
+      color: #fff;
+      text-align: center;
+      padding: 40px;
+    }
+
+    h1 {
+      font-size: 2.5em;
+      margin-bottom: 30px;
+      background: linear-gradient(90deg, #00f260, #0575e6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: glow 2s ease-in-out infinite alternate;
+    }
+
+    @keyframes glow {
+      from { text-shadow: 0 0 5px #00f260; }
+      to { text-shadow: 0 0 20px #00f260, 0 0 30px #0575e6; }
+    }
+
+    input[type="file"] {
+      padding: 12px 20px;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      background: #fff;
+      color: #000;
+      margin-bottom: 25px;
+      cursor: pointer;
+    }
+
+    #loader {
+      width: 320px;
+      margin: 20px auto;
+      height: 32px;
+      background: #111;
+      border-radius: 50px;
+      overflow: hidden;
+      box-shadow: 0 0 12px rgba(0, 255, 255, 0.3);
+    }
+
+    #progressBar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #00f260, #0575e6);
+      text-align: center;
+      line-height: 32px;
+      color: #fff;
+      font-weight: bold;
+      transition: width 0.3s ease;
+    }
+
+    #status {
+      margin-top: 10px;
+      font-size: 1.1em;
+      color: #ccc;
+    }
+
+    #output a {
+      display: inline-block;
+      margin: 10px 5px;
+      padding: 10px 16px;
+      border-radius: 8px;
+      background: #00c9ff;
+      background: linear-gradient(90deg, #92fe9d, #00c9ff);
+      color: #000;
+      font-weight: bold;
+      text-decoration: none;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    #output a:hover {
+      transform: scale(1.05);
+      box-shadow: 0 6px 15px rgba(0,255,255,0.3);
+    }
+
+    @media (max-width: 480px) {
+      body {
+        padding: 20px;
+      }
+      #loader {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>Split Movie into 15-Minute Parts</h1>
+  <input type="file" id="videoUpload" accept="video/*"><br>
+  <div id="loader"><div id="progressBar">0%</div></div>
+  <p id="status">Please upload a video.</p>
+  <div id="output"></div>
+
+  <script>
+    const { createFFmpeg, fetchFile } = FFmpeg;
+    const ffmpeg = createFFmpeg({ log: true });
+
+    const progressBar = document.getElementById('progressBar');
+    const statusText = document.getElementById('status');
+    const output = document.getElementById('output');
+
+    const updateProgress = (p) => {
+      const percent = Math.min(Math.round(p * 100), 100);
+      progressBar.style.width = percent + '%';
+      progressBar.textContent = percent + '%';
+    };
+
+    document.getElementById('videoUpload').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      output.innerHTML = '';
+      statusText.textContent = 'Loading FFmpeg...';
+      updateProgress(0);
+
+      if (!ffmpeg.isLoaded()) {
+        ffmpeg.setProgress(({ ratio }) => updateProgress(ratio));
+        await ffmpeg.load();
+      }
+
+      statusText.textContent = 'Reading file: ' + file.name;
+      await ffmpeg.FS('writeFile', file.name, await fetchFile(file));
+      updateProgress(0.2);
+
+      statusText.textContent = 'Splitting into 15-minute clips... Please wait.';
+      await ffmpeg.run(
+        '-i', file.name,
+        '-c', 'copy',
+        '-map', '0',
+        '-segment_time', '30',
+        '-f', 'segment',
+        'chunk%03d.mp4'
+      );
+      updateProgress(0.9);
+
+      statusText.textContent = 'Creating download links...';
+      let i = 0;
+      while (true) {
+        const chunkName = `chunk${String(i).padStart(3, '0')}.mp4`;
+        try {
+          const data = ffmpeg.FS('readFile', chunkName);
+          const blob = new Blob([data.buffer], { type: 'video/mp4' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = chunkName;
+          a.textContent = `Download ${chunkName}`;
+          output.appendChild(a);
+          i++;
+        } catch {
+          break;
+        }
+      }
+
+      updateProgress(1);
+      statusText.textContent = `Done! ${i} parts generated.`;
+    });
+  </script>
+</body>
+</html>
