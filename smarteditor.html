@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  
+  <title>Pro Video Editor</title>
+     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.min.js"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen p-6">
+  <div class="max-w-3xl mx-auto space-y-6">
+    <h1 class="text-4xl font-bold text-center text-cyan-400">Pro Video Editor</h1>
+
+    <!-- Upload -->
+    <div class="bg-gray-800 p-4 rounded-lg">
+      <label class="block mb-2 font-semibold">Upload Video</label>
+      <input
+        type="file"
+        id="videoInput"
+        accept="video/*"
+        class="w-full bg-gray-700 p-2 rounded"
+      />
+    </div>
+
+    <!-- Preview -->
+    <div class="bg-gray-800 p-4 rounded-lg">
+      <video id="preview" controls class="w-full bg-black rounded-lg"></video>
+    </div>
+
+    <!-- Controls -->
+    <div class="bg-gray-800 p-6 rounded-lg space-y-4">
+      <div>
+        <label class="block mb-1 font-semibold" title="Adjusts video playback speed">Video Speed (0.25–4.0×)</label>
+        <input
+          type="number"
+          id="videoSpeed"
+          value="1"
+          min="0.25"
+          max="4"
+          step="0.1"
+          class="w-full bg-gray-700 p-2 rounded"
+        />
+      </div>
+      <div>
+        <label class="block mb-1 font-semibold" title="Adjusts audio tempo (and pitch unless preserved)">Audio Tempo (0.25–4.0×)</label>
+        <input
+          type="number"
+          id="audioTempo"
+          value="1"
+          min="0.25"
+          max="4"
+          step="0.1"
+          class="w-full bg-gray-700 p-2 rounded"
+        />
+      </div>
+      <div>
+        <label class="flex items-center space-x-2">
+          <input
+            type="checkbox"
+            id="preservePitch"
+            class="bg-gray-700 rounded"
+          />
+          <span>Preserve Audio Pitch</span>
+        </label>
+      </div>
+      <div>
+        <label class="block mb-1 font-semibold">Watermark Text</label>
+        <input
+          type="text"
+          id="watermarkText"
+          value="My Watermark"
+          class="w-full bg-gray-700 p-2 rounded"
+        />
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block mb-1 font-semibold">Font Size (px)</label>
+          <input
+            type="number"
+            id="wmFontSize"
+            value="24"
+            min="12"
+            max="72"
+            class="w-full bg-gray-700 p-2 rounded"
+          />
+        </div>
+        <div>
+          <label class="block mb-1 font-semibold">Opacity (%)</label>
+          <input
+            type="number"
+            id="wmOpacity"
+            value="70"
+            min="0"
+            max="100"
+            class="w-full bg-gray-700 p-2 rounded"
+          />
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-4 items-end">
+        <div>
+          <label class="block mb-1 font-semibold">Text Color</label>
+          <input type="color" id="textColor" value="#ffffff" class="w-full h-10 rounded" />
+        </div>
+        <div>
+          <label class="block mb-1 font-semibold">Background Color</label>
+          <input type="color" id="bgColor" value="#000000" class="w-full h-10 rounded" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Export -->
+    <div class="bg-gray-800 p-4 rounded-lg flex items-center justify-between">
+      <button
+        id="exportBtn"
+        class="bg-cyan-400 text-black font-bold px-6 py-2 rounded-lg hover:bg-cyan-300 disabled:opacity-50"
+        disabled
+      >
+        Export Video
+      </button>
+      <div id="status" class="text-sm font-medium">Waiting for upload…</div>
+      <div id="spinner" class="hidden animate-spin rounded-full h-6 w-6 border-t-2 border-cyan-400"></div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // Check for WebAssembly and SharedArrayBuffer support
+      const hasWebAssembly = typeof WebAssembly === 'object';
+      const hasSharedArrayBuffer = typeof SharedArrayBuffer === 'function';
+      const hasFFmpeg = typeof FFmpeg !== 'undefined' && FFmpeg.createFFmpeg;
+
+      if (!hasWebAssembly || !hasSharedArrayBuffer || !hasFFmpeg) {
+        let errorMessage = 'Error: FFmpeg failed to load. ';
+        if (!hasWebAssembly) {
+          errorMessage += 'WebAssembly is not supported in this browser. ';
+        }
+        if (!hasSharedArrayBuffer) {
+          errorMessage += 'SharedArrayBuffer is not available. ';
+        }
+        errorMessage += 'Please serve this page over HTTP/HTTPS with the following headers: Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp. Alternatively, use a browser with SharedArrayBuffer enabled for testing (e.g., Chrome with --enable-features=SharedArrayBuffer).';
+        document.getElementById('status').textContent = errorMessage;
+        document.getElementById('exportBtn').disabled = true;
+        document.getElementById('exportBtn').classList.add('cursor-not-allowed');
+        return;
+      }
+
+      // Initialize FFmpeg
+      const ffmpeg = FFmpeg.createFFmpeg({ log: true });
+
+      // DOM elements
+      const videoInput = document.getElementById('videoInput');
+      const preview = document.getElementById('preview');
+      const exportBtn = document.getElementById('exportBtn');
+      const videoSpeedInput = document.getElementById('videoSpeed');
+      const audioTempoInput = document.getElementById('audioTempo');
+      const preservePitchInput = document.getElementById('preservePitch');
+      const watermarkText = document.getElementById('watermarkText');
+      const wmFontSizeInput = document.getElementById('wmFontSize');
+      const wmOpacityInput = document.getElementById('wmOpacity');
+      const textColorInput = document.getElementById('textColor');
+      const bgColorInput = document.getElementById('bgColor');
+      const statusEl = document.getElementById('status');
+      const spinnerEl = document.getElementById('spinner');
+
+      let originalFile;
+
+      // Utility to update status and spinner
+      function setStatus(message, busy = false) {
+        statusEl.textContent = message;
+        spinnerEl.classList.toggle('hidden', !busy);
+        exportBtn.disabled = busy || !originalFile;
+      }
+
+      // Utility to read file as Uint8Array
+      const fetchFile = async (file) => new Uint8Array(await file.arrayBuffer());
+
+      // Validate input values
+      function validateInput(input, min, max) {
+        const value = parseFloat(input.value);
+        if (isNaN(value) || value < min || value > max) {
+          input.value = 1;
+          setStatus(`Invalid ${input.id} value. Reset to 1.0.`, false);
+          return 1;
+        }
+        return value;
+      }
+
+      // Handle video upload
+      videoInput.addEventListener('change', (e) => {
+        originalFile = e.target.files[0] ?? null;
+        if (originalFile) {
+          preview.src = URL.createObjectURL(originalFile);
+          preview.load();
+          setStatus('Ready to export', false);
+        } else {
+          setStatus('Waiting for upload…', false);
+        }
+      });
+
+      // Handle export
+      exportBtn.addEventListener('click', async () => {
+        if (!originalFile) return;
+
+        const videoSpeed = validateInput(videoSpeedInput, 0.25, 4.0);
+        const audioTempo = validateInput(audioTempoInput, 0.25, 4.0);
+        const preservePitch = preservePitchInput.checked;
+        const text = watermarkText.value.trim();
+        const fontSize = parseInt(wmFontSizeInput.value, 10);
+        const opacity = parseInt(wmOpacityInput.value, 10) / 100;
+        const fontColor = textColorInput.value.replace('#', '0x');
+        const boxColor = bgColorInput.value.replace('#', '0x');
+
+        // Load FFmpeg if not loaded
+        if (!ffmpeg.isLoaded()) {
+          setStatus('Loading FFmpeg…', true);
+          try {
+            await ffmpeg.load();
+          } catch (error) {
+            setStatus('Failed to load FFmpeg: ' + error.message + '. Ensure the page is served with Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp headers.', false);
+            return;
+          }
+        }
+
+        setStatus('Processing... This may take a while.', true);
+
+        try {
+          // Write input file to FFmpeg FS
+          const inName = originalFile.name;
+          const outName = `edited_${Date.now()}.mp4`;
+          await ffmpeg.writeFile(inName, await fetchFile(originalFile));
+
+          // Build video and audio filters
+          const videoFilters = [];
+          if (videoSpeed !== 1) {
+            videoFilters.push(`setpts=${(1 / videoSpeed).toFixed(2)}*PTS`);
+          }
+          if (text) {
+            const drawText = `drawtext=text='${text}':fontcolor=${fontColor}:fontsize=${fontSize}:box=1:boxcolor=${boxColor}@${opacity}:x=(w-text_w)/2:y=h-text_h-10`;
+            videoFilters.push(drawText);
+          }
+
+          const audioFilters = [];
+          if (audioTempo !== 1) {
+            if (preservePitch) {
+              audioFilters.push(`rubberband=tempo=${audioTempo.toFixed(2)}`);
+            } else {
+              const atempo = [];
+              let rate = audioTempo;
+              while (rate > 2.0) { atempo.push(2.0); rate /= 2.0; }
+              while (rate < 0.5) { atempo.push(0.5); rate /= 0.5; }
+              atempo.push(rate.toFixed(2));
+              audioFilters.push(`atempo=${atempo.join(',')}`);
+            }
+          }
+
+          // Construct filter complex and mapping
+          let filterComplex = '';
+          let mapVideo = '0:v';
+          let mapAudio = '0:a';
+          let videoCodec = videoFilters.length === 0 ? 'copy' : 'libx264';
+          let audioCodec = audioFilters.length === 0 ? 'copy' : 'aac';
+
+          if (videoFilters.length > 0) {
+            filterComplex += `[0:v]${videoFilters.join(',')}[v];`;
+            mapVideo = '[v]';
+          }
+          if (audioFilters.length > 0) {
+            filterComplex += `[0:a]${audioFilters.join(',')}[a];`;
+            mapAudio = '[a]';
+          }
+          filterComplex = filterComplex.replace(/;$/, '');
+
+          // Build FFmpeg command
+          const args = ['-i', inName];
+          if (filterComplex) {
+            args.push('-filter_complex', filterComplex);
+          }
+          args.push('-map', mapVideo, '-map', mapAudio, '-c:v', videoCodec, '-c:a', audioCodec, '-preset', 'ultrafast', outName);
+
+          // Execute FFmpeg command
+          await ffmpeg.run(...args);
+
+          // Read and download output
+          const data = await ffmpeg.readFile(outName);
+          const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = outName;
+          a.click();
+          URL.revokeObjectURL(url);
+
+          setStatus('Export complete!', false);
+        } catch (error) {
+          console.error(error);
+          setStatus('Error during processing: ' + error.message, false);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
