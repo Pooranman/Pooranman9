@@ -1,0 +1,6 @@
+{
+  "name": "smart-editor",
+  "version": "1.0.0",
+  "description": "Smart Video Editor using FFmpeg",
+  "license": "MIT"
+}
